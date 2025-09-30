@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>計画ノート lite版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <script type="module">
+        // データ保存: localStorage (ローカル保存) を使用します。
+        
+        const mainContainer = document.getElementById('main-container');
+        const listTabsContainer = document.getElementById('list-tabs-container');
+        const currentListTitle = document.getElementById('current-list-title');
+        const addItemInput = document.getElementById('add-item-input');
+        const addItemBtn = document.getElementById('add-item-btn');
+        const itemList = document.getElementById('item-list');
+        const planDisplay = document.getElementById('plan-display');
+        const themeDisplay = document.getElementById('theme-display');
+        const roleDisplay = document.getElementById('role-display'); 
+        const timeDisplay = document.getElementById('time-display');
+        const saveStatus = document.getElementById('save-status');
+        const appIdDisplay = document.getElementById('app-id-display');
+        const exportBtn = document.getElementById('export-btn');
+        const importInput = document.getElementById('import-input');
+        const printPdfBtn = document.getElementById('print-pdf-btn'); // 新しく追加
+
+        const listManagerOverlay = document.getElementById('list-manager-overlay');
+        const closeManagerBtn = document.getElementById('close-manager-btn');
+        const newListNameInput = document.getElementById('new-list-name-input');
+        const addListBtn = document.getElementById('add-list-btn');
+        const listManagerList = document.getElementById('list-manager-list');
+
+        let lists = {};
+        let currentListKey = '材料リスト';
+
+        // Custom message box elements
+        const messageBox = document.getElementById('message-box');
+        const messageText = document.getElementById('message-text');
+        const messageCloseBtn = document.getElementById('message-close-btn');
+
+        // Custom confirmation box elements
+        const confirmationBox = document.getElementById('confirmation-box');
+        const confirmText = document.getElementById('confirm-text');
+        const confirmYesBtn = document.getElementById('confirm-yes-btn');
+        const confirmNoBtn = document.getElementById('confirm-no-btn');
+
+        function showMessage(message) {
+            messageText.textContent = message;
+            messageBox.classList.remove('hidden');
+        }
+
+        function showConfirmation(message, onConfirm) {
+            confirmText.textContent = message;
+            confirmationBox.classList.remove('hidden');
+            
+            confirmYesBtn.onclick = () => {
+                confirmationBox.classList.add('hidden');
+                onConfirm();
+            };
+            confirmNoBtn.onclick = () => {
+                confirmationBox.classList.add('hidden');
+            };
+        }
+
+        messageCloseBtn.addEventListener('click', () => {
+            messageBox.classList.add('hidden');
+        });
+
+        // Function to update the current time
+        function updateTime() {
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = (now.getMonth() + 1).toString().padStart(2, '0');
+            const day = now.getDate().toString().padStart(2, '0');
+            const hours = now.getHours().toString().padStart(2, '0');
+            const minutes = now.getMinutes().toString().padStart(2, '0');
+            const seconds = now.getSeconds().toString().padStart(2, '0');
+            const formattedTime = `${year}年${month}月${day}日 ${hours}：${minutes}：${seconds}`; // 全角コロン
+            timeDisplay.textContent = formattedTime;
+        }
+
+        // Start updating the time every second
+        setInterval(updateTime, 1000);
+
+        /**
+         * localStorageからデータを読み込み、UIをレンダリングします。
+         */
+        function loadLists() {
+            const storedData = localStorage.getItem('keikakunoto_lists');
+            if (storedData) {
+                lists = JSON.parse(storedData);
+            }
+            // 既存のリストがない場合はデフォルトをセット
+            if (Object.keys(lists).length === 0) {
+                lists = { '材料リスト': [{ text: '例：材料リストの項目', completed: false }], '課題リスト': [{ text: '例：課題リストの項目', completed: false }] };
+                saveLists(); // 初回保存
+            }
+            
+            // ページロード時の初期設定
+            if (!lists[currentListKey]) {
+                currentListKey = Object.keys(lists)[0];
+            }
+
+            renderTabs();
+            renderItems();
+
+            // データの読み込みが完了したらコンテンツを表示
+            setTimeout(() => {
+                mainContainer.classList.remove('hidden');
+                planDisplay.classList.remove('hidden');
+                themeDisplay.classList.remove('hidden');
+                roleDisplay.classList.remove('hidden');
+            }, 500);
+            
+            appIdDisplay.textContent = 'ローカル保存';
+        }
+
+        /**
+         * 現在のリストデータをlocalStorageに保存します。
+         */
+        function saveLists() {
+            localStorage.setItem('keikakunoto_lists', JSON.stringify(lists));
+            saveStatus.textContent = "保存済み";
+            saveStatus.classList.remove('hidden');
+            setTimeout(() => {
+                saveStatus.classList.add('hidden');
+            }, 3000);
+        }
+        
+        // --- インポート/エクスポート/印刷機能 ---
+
+        // エクスポート（書き出し）
+        exportBtn.addEventListener('click', () => {
+            const dataToExport = JSON.stringify(lists, null, 2);
+            const blob = new Blob([dataToExport], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = '計画ノート_データ.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            showMessage('リストデータをJSONファイルとして書き出しました。');
+        });
+
+        // インポート（読み込み/データ結合）
+        importInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const importedLists = JSON.parse(e.target.result);
+                    
+                    if (typeof importedLists !== 'object' || Array.isArray(importedLists)) {
+                        throw new Error("Invalid format");
+                    }
+
+                    showConfirmation('現在のリストにインポートデータの内容を追加（結合）しますか？', () => {
+                        // データを結合するロジック
+                        Object.keys(importedLists).forEach(listName => {
+                            const importedItems = importedLists[listName];
+                            
+                            if (lists[listName]) {
+                                // 既存のリストがある場合、項目を結合
+                                lists[listName] = [...lists[listName], ...importedItems];
+                            } else {
+                                // 新しいリスト名の場合、リスト全体を追加
+                                lists[listName] = importedItems;
+                            }
+                        });
+
+                        saveLists();
+                        renderTabs();
+                        renderItems();
+                        showMessage('データの読み込みと結合が完了しました。');
+                    });
+
+                } catch (error) {
+                    console.error("Import failed:", error);
+                    showMessage('インポートに失敗しました。ファイル形式が正しくありません。');
+                } finally {
+                    importInput.value = ''; // ファイル選択をリセット
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        // PDF印刷/保存
+        printPdfBtn.addEventListener('click', () => {
+            // ブラウザの印刷ダイアログを開き、「送信先」で「PDFとして保存」を選択できるようにする
+            window.print();
+        });
+
+
+        // --- リスト操作関数 ---
+
+        window.addItem = () => {
+            const text = addItemInput.value.trim();
+            if (text === '') return;
+            
+            if (!lists[currentListKey]) {
+                lists[currentListKey] = [];
+            }
+            lists[currentListKey].push({ text, completed: false });
+            saveLists();
+            addItemInput.value = '';
+            renderItems();
+        };
+
+        window.editItem = (index) => {
+            const listItem = itemList.children[index];
+            const itemTextSpan = listItem.querySelector('span');
+            const itemText = itemTextSpan.textContent;
+            
+            const textInput = document.createElement('input');
+            textInput.type = 'text';
+            textInput.value = itemText;
+            textInput.className = 'item-text-input';
+            itemTextSpan.replaceWith(textInput);
+            textInput.focus();
+
+            const editButton = listItem.querySelector('.edit-btn');
+            const saveButton = document.createElement('button');
+            saveButton.textContent = '更新';
+            saveButton.className = 'bg-blue-500 text-white py-1 px-3 rounded hover:bg-blue-600';
+            saveButton.onclick = () => {
+                const newText = textInput.value.trim();
+                if (newText !== '') {
+                    lists[currentListKey][index].text = newText;
+                    saveLists();
+                }
+                renderItems();
+            };
+            editButton.replaceWith(saveButton);
+        };
+
+        window.toggleCompletion = (index) => {
+            lists[currentListKey][index].completed = !lists[currentListKey][index].completed;
+            saveLists();
+            renderItems();
+        };
+
+        window.deleteItem = (index) => {
+            lists[currentListKey].splice(index, 1);
+            saveLists();
+            renderItems();
+        };
+
+        window.addList = () => {
+            const name = newListNameInput.value.trim();
+            if (name === '') {
+                showMessage('リスト名を入力してください。');
+                return;
+            }
+            if (lists[name]) {
+                showMessage('既に存在するリスト名とは異なる名前を使用してください。');
+                return;
+            }
+            lists[name] = [];
+            saveLists();
+            newListNameInput.value = '';
+            renderTabs();
+            renderListManagerList();
+        };
+
+        window.updateList = (oldName, inputElement) => {
+            const newName = inputElement.value.trim();
+            if (newName === '' || newName === oldName) return;
+
+            // Check if the new name already exists
+            if (lists[newName]) {
+                showMessage('そのリスト名は既に存在します。');
+                return;
+            }
+
+            const newLists = {};
+            Object.keys(lists).forEach(key => {
+                if (key === oldName) {
+                    newLists[newName] = lists[oldName];
+                } else {
+                    newLists[key] = lists[key];
+                }
+            });
+            lists = newLists;
+            if (currentListKey === oldName) {
+                currentListKey = newName;
+            }
+            saveLists();
+            renderTabs();
+            renderListManagerList();
+            renderItems();
+        };
+
+        window.deleteList = (key) => {
+            if (Object.keys(lists).length > 1) {
+                showConfirmation(`リスト「${key}」を削除しますか？`, () => {
+                    delete lists[key];
+                    if (currentListKey === key) {
+                        currentListKey = Object.keys(lists)[0];
+                    }
+                    saveLists();
+                    renderTabs();
+                    renderListManagerList();
+                    renderItems();
+                });
+            } else {
+                showMessage('少なくとも1つのリストが必要です。');
+            }
+        };
+        
+        function renderTabs() {
+            listTabsContainer.innerHTML = '';
+            Object.keys(lists).forEach(key => {
+                const button = document.createElement('button');
+                button.textContent = key;
+                button.className = `py-2 px-4 rounded-lg font-bold transition-colors duration-200 ${key === currentListKey ? 'bg-blue-500 text-white' : 'bg-gray-400 hover:bg-gray-500 text-white'}`;
+                button.onclick = () => {
+                    currentListKey = key;
+                    renderTabs();
+                    renderItems();
+                };
+                listTabsContainer.appendChild(button);
+            });
+            const manageBtn = document.createElement('button');
+            manageBtn.textContent = 'リストを編集';
+            manageBtn.className = 'py-2 px-4 rounded-lg font-bold bg-gray-500 hover:bg-gray-600 text-white transition-colors duration-200';
+            manageBtn.onclick = () => {
+                listManagerOverlay.classList.remove('hidden');
+                renderListManagerList();
+            };
+            listTabsContainer.appendChild(manageBtn);
+        }
+
+        function renderItems() {
+            currentListTitle.textContent = currentListKey;
+            itemList.innerHTML = '';
+            const items = lists[currentListKey] || [];
+            items.forEach((item, index) => {
+                const li = document.createElement('li');
+                li.className = `p-4 rounded-lg flex items-center justify-between transition-colors duration-200 ${item.completed ? 'completed' : ''}`;
+                li.innerHTML = `
+                    <span id="item-text-${index}" class="text-lg">${item.text}</span>
+                    <div class="flex items-center space-x-2">
+                        <button onclick="editItem(${index})" class="text-gray-500 hover:text-gray-600 edit-btn">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                        <input type="checkbox" class="h-5 w-5 rounded form-checkbox text-blue-500" ${item.completed ? 'checked' : ''} onclick="toggleCompletion(${index})">
+                        <button onclick="deleteItem(${index})" class="text-gray-500 hover:text-gray-600 ml-2">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
+                `;
+                itemList.appendChild(li);
+            });
+        }
+        
+        function renderListManagerList() {
+            listManagerList.innerHTML = '';
+            Object.keys(lists).forEach(key => {
+                const li = document.createElement('li');
+                li.className = 'flex items-center space-x-2 mb-2 p-2 bg-gray-100 rounded-md';
+                li.innerHTML = `
+                    <input type="text" value="${key}" class="flex-grow p-1 rounded-md border" data-old-name="${key}">
+                    <button onclick="updateList('${key}', this.previousElementSibling)" class="bg-blue-500 text-white py-1 px-3 rounded hover:bg-blue-600">更新</button>
+                    <button onclick="deleteList('${key}')" class="bg-red-500 text-white py-1 px-3 rounded hover:bg-red-600">削除</button>
+                `;
+                listManagerList.appendChild(li);
+            });
+        }
+
+        addItemBtn.addEventListener('click', window.addItem);
+        addItemInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                window.addItem();
+            }
+        });
+        
+        addListBtn.addEventListener('click', window.addList);
+        closeManagerBtn.addEventListener('click', () => {
+            listManagerOverlay.classList.add('hidden');
+        });
+
+        // ページ読み込み時にリストを読み込み
+        document.addEventListener('DOMContentLoaded', loadLists);
+    </script>
+    <style>
+        body {
+            font-family: 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', Meiryo, sans-serif;
+            background-color: #f0f4f8;
+            color: #334e68;
+        }
+        .container {
+            max-width: 768px;
+        }
+        .task-list-container {
+            background-color: #ffffff;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .task-list li {
+            background-color: #e3f2fd;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 8px;
+        }
+        .task-list li.completed {
+            text-decoration: line-through;
+            color: #9aa9b9;
+        }
+        .item-text-input {
+            background-color: #ffffff;
+            color: #334e68;
+            border: 1px solid #cce7ff;
+            border-radius: 4px;
+            padding: 4px;
+            flex-grow: 1;
+            margin-right: 8px;
+        }
+        .overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 50;
+        }
+        .modal {
+            background-color: #fff;
+            padding: 2rem;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            max-width: 500px;
+            width: 90%;
+        }
+        .message-box, .confirmation-box {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: #fff;
+            padding: 2rem;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            z-index: 100;
+            text-align: center;
+        }
+        /* 印刷用CSS */
+        @media print {
+            body {
+                background-color: #fff; /* 印刷時は背景を白に */
+                color: #000;
+                padding: 0;
+                margin: 0;
+            }
+            .task-list-container {
+                box-shadow: none; /* 印刷時は影を非表示に */
+                border: none;
+                padding: 0;
+            }
+            /* 印刷時に非表示にしたい要素 */
+            #list-tabs-container,
+            .flex.mb-4, /* 項目追加フォーム */
+            .flex-wrap.space-x-4.mb-4, /* エクスポート/インポートボタン群 */
+            .edit-btn, /* 編集ボタン */
+            input[type="checkbox"], /* チェックボックス自体を非表示にする */
+            .fa-trash, /* 削除アイコン */
+            #save-status,
+            #app-id-display,
+            #time-display,
+            .overlay, /* リスト編集モーダル */
+            .message-box,
+            .confirmation-box {
+                display: none !important;
+            }
+            .task-list li {
+                background-color: #fff; /* リスト項目の背景も白に */
+                border: 1px solid #ccc; /* 境界線を追加 */
+                margin-bottom: 5px;
+            }
+        }
+    </style>
+</head>
+<body class="p-8">
+    <div class="container mx-auto">
+        <h1 class="text-4xl font-bold text-center mb-6">計画ノート lite版</h1>
+        
+        <div id="main-container" class="hidden">
+            <div class="text-center mb-4 text-sm">
+                <p id="plan-display" class="text-lg mb-1 hidden">計画：宝仙祭</p>
+                <p id="theme-display" class="text-lg mb-1 hidden">テーマ：海底</p>
+                <p id="role-display" class="text-lg mb-1 hidden">役割：外装</p>
+                <div class="flex items-center justify-center flex-wrap space-x-4 mb-4">
+                    <!-- エクスポート/インポートボタン -->
+                    <button id="export-btn" class="bg-gray-500 text-white py-1 px-3 rounded-lg hover:bg-gray-600 transition-colors duration-200 text-sm">
+                        書き出し (JSON)
+                    </button>
+                    <label for="import-input" class="bg-gray-500 text-white py-1 px-3 rounded-lg hover:bg-gray-600 transition-colors duration-200 cursor-pointer text-sm">
+                        読み込み/結合
+                    </label>
+                    <input type="file" id="import-input" accept=".json" class="hidden">
+                    <!-- PDF印刷/保存ボタンを追加 -->
+                    <button id="print-pdf-btn" class="bg-teal-500 text-white py-1 px-3 rounded-lg hover:bg-teal-600 transition-colors duration-200 text-sm">
+                        PDF印刷/保存
+                    </button>
+                </div>
+                <div class="flex items-center flex-col">
+                    <p id="app-id-display" class="text-sm font-mono text-gray-400 mt-2"></p>
+                    <p id="time-display" class="text-xs text-gray-500 mt-2"></p>
+                    <span id="save-status" class="text-xs text-green-500 ml-2 mt-2 hidden">保存済み</span>
+                </div>
+            </div>
+            
+            <div class="task-list-container">
+                <div id="list-tabs-container" class="flex justify-center flex-wrap space-x-2 mb-4">
+                    <!-- リスト切り替えタブと「リストを編集」ボタンがここに動的に表示されます -->
+                </div>
+                <h2 id="current-list-title" class="text-2xl font-semibold mb-4 text-center"></h2>
+                <div class="flex mb-4">
+                    <input type="text" id="add-item-input" class="flex-grow p-2 rounded-l-lg bg-gray-200 text-gray-800 placeholder-gray-500 focus:outline-none" placeholder="項目を追加">
+                    <button id="add-item-btn" class="p-2 bg-blue-500 rounded-r-lg hover:bg-blue-600 text-white font-bold transition-colors duration-200">追加</button>
+                </div>
+                <ul id="item-list" class="task-list space-y-2"></ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- リスト管理オーバーレイ -->
+    <div id="list-manager-overlay" class="overlay hidden">
+        <div class="modal">
+            <h2 class="text-2xl font-semibold mb-4">リスト編集</h2>
+            <div class="flex mb-4">
+                <input type="text" id="new-list-name-input" class="flex-grow p-2 rounded-l-lg bg-gray-200 text-gray-800 placeholder-gray-500 focus:outline-none" placeholder="新しいリスト名">
+                <button id="add-list-btn" class="p-2 bg-blue-500 rounded-r-lg hover:bg-blue-600 text-white font-bold transition-colors duration-200">追加</button>
+            </div>
+            <ul id="list-manager-list" class="space-y-2"></ul>
+            <button id="close-manager-btn" class="mt-4 bg-gray-400 text-white py-2 px-4 rounded-lg hover:bg-gray-500 transition-colors duration-200">閉じる</button>
+        </div>
+    </div>
+
+    <!-- メッセージボックス -->
+    <div id="message-box" class="message-box hidden">
+        <p id="message-text" class="mb-4"></p>
+        <button id="message-close-btn" class="bg-blue-500 text-white py-1 px-4 rounded hover:bg-blue-600">閉じる</button>
+    </div>
+    
+    <!-- 確認ダイアログ -->
+    <div id="confirmation-box" class="confirmation-box hidden">
+        <p id="confirm-text" class="mb-4"></p>
+        <div class="flex justify-center space-x-4">
+            <button id="confirm-yes-btn" class="bg-red-500 text-white py-1 px-4 rounded hover:bg-red-600">はい</button>
+            <button id="confirm-no-btn" class="bg-gray-500 text-white py-1 px-4 rounded hover:bg-gray-600">いいえ</button>
+        </div>
+    </div>
+</body>
+</html>
